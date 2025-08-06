@@ -4,7 +4,11 @@
 import pytest
 import xarray as xr
 
-from access_nri_intake.source.utils import get_timeinfo
+from access_nri_intake.source.utils import (
+    EmptyFileError,
+    _guess_start_end_dates,
+    get_timeinfo,
+)
 
 
 @pytest.mark.parametrize(
@@ -142,3 +146,31 @@ def test_get_timeinfo(times, bounds, ffreq, expected):
     )
 
     assert get_timeinfo(ds, filename_frequency=ffreq, time_dim="time") == expected
+
+
+def test__guess_start_end_dates_warning():
+    with pytest.warns(
+        UserWarning, match="Cannot infer start and end times for subhourly frequencies."
+    ):
+        _guess_start_end_dates(
+            ts=xr.cftime_range("1900-01-01", periods=1, freq="6H")[0],
+            te=xr.cftime_range("1900-01-01", periods=1, freq="6H")[0],
+            frequency=(10, "min"),
+        )
+
+
+def test_empty_file_error():
+    times = []
+    ffreq = (3, "hr")
+
+    ds = xr.Dataset(
+        data_vars={"dummy": ("time", [])},
+        coords={"time": times},
+    )
+
+    ds["time"].attrs |= dict(
+        units="days since 1900-01-01 00:00:00", calendar="GREGORIAN"
+    )
+
+    with pytest.raises(EmptyFileError):
+        get_timeinfo(ds, filename_frequency=ffreq, time_dim="time")

@@ -7,6 +7,7 @@ import multiprocessing
 import re
 import traceback
 from pathlib import Path
+# PP
 from typing import Optional, Union
 
 import xarray as xr
@@ -20,10 +21,21 @@ from . import ESM_JSONSCHEMA, PATH_COLUMN, VARIABLE_COLUMN
 #PP check if I still need this?
 from .utils import (
     EmptyFileError,
-    _AccessNCFileInfo,
+    _NCFileInfo,
     _VarInfo,
     get_timeinfo,
 )
+
+__all__ = [
+    "AccessOm2Builder",
+    "AccessOm3Builder",
+    "Mom6Builder",
+    "AccessEsm15Builder",
+    "AccessCm2Builder",
+    "ROMSBuilder",
+    "WoaBuilder",
+    #PP "AccessMopperBuilder",
+]
 
 # Frequency translations
 FREQUENCIES: dict[str, tuple[int, str]] = {
@@ -33,6 +45,7 @@ FREQUENCIES: dict[str, tuple[int, str]] = {
     "_mon$": (1, "mon"),
     "1mon": (1, "mon"),
     "yearly": (1, "yr"),
+    "annual": (1, "yr"),
     "_ann$": (1, "yr"),
 }
 
@@ -40,10 +53,15 @@ FREQUENCIES: dict[str, tuple[int, str]] = {
 PATTERNS_HELPERS = {
     "not_multi_digit": "(?:\\d(?!\\d)|[^\\d](?=\\d)|[^\\d](?!\\d))",
     "om3_components": "(?:cice|mom6|ww3)",
+    "mom6_components": "(?:ocean|ice)",
+    "mom6_added_timestamp": "(\\d{4}_\\d{3})",
     "ymds": "\\d{4}[_,\\-]\\d{2}[_,\\-]\\d{2}[_,\\-]\\d{5}",
     "ymd": "\\d{4}[_,\\-]\\d{2}[_,\\-]\\d{2}",
+    "ymd-ns": "\\d{4}\\d{2}\\d{2}",
     "ym": "\\d{4}[_,\\-]\\d{2}",
+    "yymm": "\\d{2}[_,\\-]\\d{2}",
     "y": "\\d{4}",
+    "counter": "\\d+",
 }
 
 
@@ -57,19 +75,19 @@ class BaseBuilder(Builder):
     This builds on the ecgtools.Builder class.
     """
 
-    # Base class carries an empty set
+    # Base class carries an empty set, and a GenericParser
     PATTERNS: list = []
 
     def __init__(
         self,
-        path: Union[str, list[str]],
+        path: str | list[str],
         depth: int = 0,
-        exclude_patterns: Optional[list[str]] = None,
-        include_patterns: Optional[list[str]] = None,
+        exclude_patterns: list[str] | None = None,
+        include_patterns: list[str] | None = None,
         data_format: str = "netcdf",
-        groupby_attrs: Optional[list[str]] = None,
-        aggregations: Optional[list[dict]] = None,
-        storage_options: Optional[dict] = None,
+        groupby_attrs: list[str] | None = None,
+        aggregations: list[dict] | None = None,
+        storage_options: dict | None = None,
         joblib_parallel_kwargs: dict = {"n_jobs": multiprocessing.cpu_count()},
     ):
         """
@@ -124,7 +142,7 @@ class BaseBuilder(Builder):
         self._parse()
         return self
 
-    def _save(self, name: str, description: str, directory: Optional[str]):
+    def _save(self, name: str, description: str, directory: str | None):
         super().save(
             name=name,
             path_column_name=PATH_COLUMN,
@@ -136,12 +154,10 @@ class BaseBuilder(Builder):
             description=description,
             directory=directory,
             catalog_type="file",
-            to_csv_kwargs={"compression": "gzip"},
+            to_csv_kwargs={"compression": None},
         )
 
-    def save(
-        self, name: str, description: str, directory: Optional[str] = None
-    ) -> None:
+    def save(self, name: str, description: str, directory: str | None = None) -> None:
         """
         Save datastore contents to a file.
 
@@ -179,7 +195,10 @@ class BaseBuilder(Builder):
                 return self
 
         raise ParserError(
-            "Parser returns no valid assets. Try parsing a single file with Builder.parser(file)"
+            f"""Parser returns no valid assets.
+            Try parsing a single file with Builder.parser(file)
+            Last failed asset: {asset}
+            Asset parser return: {info}"""
         )
 
     def build(self):
@@ -222,13 +241,13 @@ class BaseBuilder(Builder):
         raise NotImplementedError
 
     @classmethod
-    def parse_access_filename(
+    def parse_filename(
         cls,
         filename: str,
-        patterns: Optional[list[str]] = None,
+        patterns: list[str] | None = None,
         frequencies: dict = FREQUENCIES,
         redaction_fill: str = "X",
-    ) -> tuple[str, Optional[str], Optional[str]]:
+    ) -> tuple[str, str | None, str | None]:
         """
         Parse an ACCESS model filename and return a file id and any time information
 
@@ -269,11 +288,13 @@ class BaseBuilder(Builder):
         for pattern in patterns:
             match = re.match(pattern, file_id)
             if match:
+                # FIXME switch to using named group for timestamp
+                # Loop over all found groups and redact
                 timestamp = match.group(1)
-                redaction = re.sub(r"\d", redaction_fill, timestamp)
-                file_id = (
-                    file_id[: match.start(1)] + redaction + file_id[match.end(1) :]
-                )
+                for grp in match.groups():
+                    if grp is not None:
+                        redaction = re.sub(r"\d", redaction_fill, grp)
+                        file_id = re.sub(grp, redaction, file_id)
                 break
 
         # Remove non-python characters from file ids
@@ -283,11 +304,9 @@ class BaseBuilder(Builder):
         return file_id, timestamp, frequency
 
     @classmethod
-    def parse_access_ncfile(
-        cls, file: str, time_dim: str = "time"
-    ) -> _AccessNCFileInfo:
+    def parse_ncfile(cls, file: str, time_dim: str = "time") -> _NCFileInfo:
         """
-        Get Intake-ESM datastore entry info from an ACCESS netcdf file
+        Get Intake-ESM datastore entry info from a netcdf file
 
         Parameters
         ----------
@@ -298,7 +317,7 @@ class BaseBuilder(Builder):
 
         Returns
         -------
-        output_nc_info: _AccessNCFileInfo
+        output_nc_info: _NCFileInfo
             A dataclass containing the information parsed from the file
 
         Raises
@@ -308,7 +327,7 @@ class BaseBuilder(Builder):
 
         file_path = Path(file)
 
-        file_id, filename_timestamp, filename_frequency = cls.parse_access_filename(
+        file_id, filename_timestamp, filename_frequency = cls.parse_filename(
             file_path.stem
         )
 
@@ -332,7 +351,7 @@ class BaseBuilder(Builder):
         if not dvars.variable_list:
             raise EmptyFileError("This file contains no variables")
 
-        output_ncfile = _AccessNCFileInfo(
+        output_ncfile = _NCFileInfo(
             filename=file_path.name,
             path=file,
             file_id=file_id,
@@ -350,13 +369,13 @@ class AccessOm2Builder(BaseBuilder):
     """Intake-ESM datastore builder for ACCESS-OM2 COSIMA datasets"""
 
     PATTERNS = [
-        rf"^iceh.*\.({PATTERNS_HELPERS['ymd']}|{PATTERNS_HELPERS['ym']})$",  # ACCESS-ESM1.5/OM2/CM2 ice
+        rf"^iceh.*\.({PATTERNS_HELPERS['ymd']}|{PATTERNS_HELPERS['ym']}).*$",  # ACCESS-ESM1.5/OM2/CM2 ice
         rf"^iceh.*\.(\d{{3}})-{PATTERNS_HELPERS['not_multi_digit']}.*",  # ACCESS-OM2 ice
         rf"^ocean.*[_,-](?:ymd|ym|y)_({PATTERNS_HELPERS['ymd']}|{PATTERNS_HELPERS['ym']}|{PATTERNS_HELPERS['y']})(?:$|[_,-]{PATTERNS_HELPERS['not_multi_digit']}.*)",  # ACCESS-OM2 ocean
         r"^ocean.*[^\d]_(\d{2})$",  # A few wierd files in ACCESS-OM2 01deg_jra55v13_ryf9091
     ]
 
-    def __init__(self, path):
+    def __init__(self, path, **kwargs):
         """
         Initialise a AccessOm2Builder
 
@@ -369,8 +388,8 @@ class AccessOm2Builder(BaseBuilder):
         kwargs = dict(
             path=path,
             depth=3,
-            exclude_patterns=["*restart*", "*o2i.nc"],
-            include_patterns=["*.nc"],
+            exclude_patterns=kwargs.get("exclude_patterns") or ["*restart*", "*o2i.nc"],
+            include_patterns=kwargs.get("include_patterns") or ["*.nc"],
             data_format="netcdf",
             groupby_attrs=["file_id", "frequency"],
             aggregations=[
@@ -397,7 +416,7 @@ class AccessOm2Builder(BaseBuilder):
             if realm == "ice":
                 realm = "seaIce"
 
-            nc_info = cls.parse_access_ncfile(file)
+            nc_info = cls.parse_ncfile(file)
             ncinfo_dict = nc_info.to_dict()
 
             ncinfo_dict["realm"] = realm
@@ -415,7 +434,7 @@ class AccessOm3Builder(BaseBuilder):
         rf"[^\.]*\.{PATTERNS_HELPERS['om3_components']}\..*?({PATTERNS_HELPERS['ymds']}|{PATTERNS_HELPERS['ymd']}|{PATTERNS_HELPERS['ym']}|{PATTERNS_HELPERS['y']})(?:$|{PATTERNS_HELPERS['not_multi_digit']})",  # ACCESS-OM3
     ]
 
-    def __init__(self, path):
+    def __init__(self, path, **kwargs):
         """
         Initialise a AccessOm3Builder
 
@@ -428,14 +447,15 @@ class AccessOm3Builder(BaseBuilder):
         kwargs = dict(
             path=path,
             depth=2,
-            exclude_patterns=[
+            exclude_patterns=kwargs.get("exclude_patterns")
+            or [
                 "*restart*",
                 "*MOM_IC.nc",
                 "*ocean_geometry.nc",
                 "*ocean.stats.nc",
                 "*Vertical_coordinate.nc",
             ],
-            include_patterns=["*.nc"],
+            include_patterns=kwargs.get("include_patterns") or ["*.nc"],
             data_format="netcdf",
             groupby_attrs=["file_id", "frequency"],
             aggregations=[
@@ -455,7 +475,7 @@ class AccessOm3Builder(BaseBuilder):
     @classmethod
     def parser(cls, file) -> dict:
         try:
-            output_nc_info = cls.parse_access_ncfile(file)
+            output_nc_info = cls.parse_ncfile(file)
             ncinfo_dict = output_nc_info.to_dict()
 
             if "mom6" in ncinfo_dict["filename"]:
@@ -463,6 +483,77 @@ class AccessOm3Builder(BaseBuilder):
             elif "ww3" in ncinfo_dict["filename"]:
                 realm = "wave"
             elif "cice" in ncinfo_dict["filename"]:
+                realm = "seaIce"
+            else:
+                raise ParserError(f"Cannot determine realm for file {file}")
+            ncinfo_dict["realm"] = realm
+
+            return ncinfo_dict
+
+        except Exception:
+            return {INVALID_ASSET: file, TRACEBACK: traceback.format_exc()}
+
+
+# FIXME refactor to be called Mom6Builder (TBC)
+class Mom6Builder(BaseBuilder):
+    """Intake-ESM datastore builder for MOM6 COSIMA datasets"""
+
+    # FIXME should be able to make one super-pattern, but couldn't
+    # make it work with the ? selector after mom6_added_timestamp
+    # NOTE: Order here is important!
+    PATTERNS = [
+        rf"[^\.]*({PATTERNS_HELPERS['ymd-ns']})\.{PATTERNS_HELPERS['mom6_components']}.*{PATTERNS_HELPERS['mom6_added_timestamp']}.*$",  # Daily snapshot naming
+        rf"[^\.]*({PATTERNS_HELPERS['ymd-ns']})\.{PATTERNS_HELPERS['mom6_components']}.*$",  # Basic naming
+    ]
+
+    def __init__(self, path, **kwargs):
+        """
+        Initialise a Mom6Builder
+
+        Parameters
+        ----------
+        path : str or list of str
+            Path or list of paths to crawl for assets/files.
+        """
+
+        kwargs = dict(
+            path=path,
+            depth=1,
+            exclude_patterns=kwargs.get("exclude_patterns")
+            or [
+                "*restart*",
+                "*MOM_IC.nc",
+                "*sea_ice_geometry.nc",
+                "*ocean_geometry.nc",
+                "*ocean.stats.nc",
+                "*Vertical_coordinate.nc",
+            ],
+            include_patterns=kwargs.get("include_patterns") or ["*.nc"],
+            data_format="netcdf",
+            groupby_attrs=["file_id", "frequency"],
+            aggregations=[
+                {
+                    "type": "join_existing",
+                    "attribute_name": "start_date",
+                    "options": {
+                        "dim": "time",
+                        "combine": "by_coords",
+                    },
+                },
+            ],
+        )
+
+        super().__init__(**kwargs)
+
+    @classmethod
+    def parser(cls, file):
+        try:
+            output_nc_info = cls.parse_ncfile(file)
+            ncinfo_dict = output_nc_info.to_dict()
+
+            if "ocean" in ncinfo_dict["filename"]:
+                realm = "ocean"
+            elif "ice" in ncinfo_dict["filename"] or "roms" in ncinfo_dict["filename"]:
                 realm = "seaIce"
             else:
                 raise ParserError(f"Cannot determine realm for file {file}")
@@ -482,7 +573,7 @@ class AccessEsm15Builder(BaseBuilder):
         r"^.*\.p.-(\d{6})_.*",  # ACCESS-ESM1.5 atmosphere
     ]
 
-    def __init__(self, path, ensemble):
+    def __init__(self, path, ensemble: bool, **kwargs):
         """
         Initialise a AccessEsm15Builder
 
@@ -498,8 +589,8 @@ class AccessEsm15Builder(BaseBuilder):
         kwargs = dict(
             path=path,
             depth=3,
-            exclude_patterns=["*restart*"],
-            include_patterns=["*.nc*"],
+            exclude_patterns=kwargs.get("exclude_patterns") or ["*restart*"],
+            include_patterns=kwargs.get("include_patterns") or ["*.nc*"],
             data_format="netcdf",
             groupby_attrs=["file_id", "frequency"],
             aggregations=[
@@ -533,7 +624,7 @@ class AccessEsm15Builder(BaseBuilder):
 
             realm_mapping = {"atm": "atmos", "ocn": "ocean", "ice": "seaIce"}
 
-            nc_info = cls.parse_access_ncfile(file)
+            nc_info = cls.parse_ncfile(file)
             ncinfo_dict = nc_info.to_dict()
 
             # Remove exp_id from file id so that members can be part of the same dataset
@@ -559,7 +650,224 @@ class AccessCm2Builder(AccessEsm15Builder):
         rf"^iceh.*\.({PATTERNS_HELPERS['ymd']}|{PATTERNS_HELPERS['ym']})$",  # ACCESS-ESM1.5/OM2/CM2 ice
         rf"^iceh.*\.({PATTERNS_HELPERS['ym']})-{PATTERNS_HELPERS['not_multi_digit']}.*",  # ACCESS-CM2 ice
         r"^.*\.p.(\d{6})_.*",  # ACCESS-CM2 atmosphere
+
+
+class ROMSBuilder(BaseBuilder):
+    """Intake-ESM datastore builder for ROMS datasets
+
+    See https://github.com/bkgf/ROMSIceShelf for details on the ROMSIceShelf model.
+    """
+
+    PATTERNS = [
+        rf"^roms_his_({PATTERNS_HELPERS['counter']}).*?$",
     ]
+
+    def __init__(self, path, **kwargs):
+        """
+        Initialise a AccessOm2Builder
+
+        Parameters
+        ----------
+        path : str or list of str
+            Path or list of paths to crawl for assets/files.
+        """
+
+        kwargs = dict(
+            path=path,
+            depth=1,
+            exclude_patterns=kwargs.get("exclude_patterns", ["*avg*", "*rst*"]),
+            include_patterns=kwargs.get("include_patterns", ["*.nc"]),
+            data_format="netcdf",
+            groupby_attrs=["file_id", "frequency"],
+            aggregations=[
+                {
+                    "type": "join_existing",
+                    "attribute_name": "start_date",
+                    "options": {
+                        "dim": "ocean_time",
+                        "combine": "by_coords",
+                    },
+                },
+            ],
+        )
+
+        super().__init__(**kwargs)
+
+    @classmethod
+    def parser(cls, file) -> dict:
+        try:
+            realm = "seaIce"
+
+            nc_info = cls.parse_ncfile(file, time_dim="ocean_time")
+            ncinfo_dict = nc_info.to_dict()
+
+            ncinfo_dict["realm"] = realm
+
+            r variable = exargs.pop('variable')
+        with xr.open_dataset(
+            fpath,
+            chunks={},
+            decode_cf=False,
+            decode_times=False,
+            decode_coords=False,
+        ) as ds:
+            attrs = ds[variable].attrs
+            variable_long_name = attrs.get('long_name', 'unknown')
+            variable_standard_name = attrs.get('standard_name', 'unknown')
+            variable_cell_methods = attrs.get('cell_methods', 'unknown')
+            variable_units = attrs.get('units', 'unknown')
+            tracking_id = ds.attrs.get('tracking_id', 'unknown')
+
+        output_nc_info = _AccessNCFileInfo(
+            filename=Path(fpath).name,
+            path=fpath,
+            file_id=tracking_id,
+            filename_timestamp=date_range,
+            frequency=exargs.pop('frequency'),
+            start_date=start_date,
+            end_date=end_date,
+            variable=[variable],
+            variable_long_name=[variable_long_name],
+            variable_standard_name=[variable_standard_name],
+            variable_units=[variable_units],
+            variable_cell_methods=[variable_cell_methods],
+        )
+
+        return output_nc_info, exargseturn ncinfo_dict
+        except Exception:
+            return {INVALID_ASSET: file, TRACEBACK: traceback.format_exc()}
+
+
+class WoaBuilder(BaseBuilder):
+    """Intake-ESM datastore builder for WOA datasets"""
+
+    PATTERNS = [
+        rf"^woa13_ts_({PATTERNS_HELPERS['counter']})_mom{PATTERNS_HELPERS['counter']}.*?$",
+        rf"^woa13_decav_ts_({PATTERNS_HELPERS['counter']})_{PATTERNS_HELPERS['counter']}v2.*?$",
+        r"surface.nc",
+        r"ocean_temp_salt.res.nc",
+    ]
+
+    def __init__(self, path, **kwargs):
+        """
+        Initialise a WoaBuilder
+
+        Parameters
+        ----------
+        path : str or list of str
+            Path or list of paths to crawl for assets/files.
+        """
+
+        kwargs = dict(
+            path=path,
+            depth=2,
+            exclude_patterns=kwargs.get("exclude_patterns", ["*avg*", "*rst*"]),
+            include_patterns=kwargs.get("include_patterns", ["*.nc"]),
+            data_format="netcdf",
+            groupby_attrs=["file_id"],
+            aggregations=[
+                {
+                    "type": "join_existing",
+                    "attribute_name": "start_date",
+                    "options": {
+                        "dim": "ocean_time",
+                        "combine": "by_coords",
+                    },
+                },
+            ],
+        )
+
+        super().__init__(**kwargs)
+
+    @classmethod
+    def parser(cls, file) -> dict:
+        try:
+            nc_info = cls.parse_ncfile(file, time_dim="time")
+            ncinfo_dict = nc_info.to_dict()
+
+            ncinfo_dict = cls.post_proc_ncinfo(ncinfo_dict)
+
+            return ncinfo_dict
+        except Exception:
+            return {INVALID_ASSET: file, TRACEBACK: traceback.format_exc()}
+
+    @staticmethod
+    def post_proc_ncinfo(ncinfo_dict: dict) -> dict:
+        """
+        Post process the ncinfo_dict to add anything that looks like `KDS` to the file id
+        """
+        file_id = ncinfo_dict["file_id"]
+        pathparts = Path(ncinfo_dict["path"]).parts
+        for part in pathparts:
+            if "kds" in part.lower():
+                file_id = f"{file_id}_{part}"
+                break
+
+        ncinfo_dict["file_id"] = file_id
+        ncinfo_dict["realm"] = "ocean"
+        return ncinfo_dict
+
+    @classmethod
+    def parse_filename(
+        cls,
+        filename: str,
+        patterns: list[str] | None = None,
+        frequencies: dict = FREQUENCIES,
+        redaction_fill: str = "X",
+    ) -> tuple[str, str | None, str | None]:
+        """
+        Parse an ACCESS model filename and return a file id and any time information
+
+        Parameters
+        ----------
+        filename: str
+            The filename to parse with the extension removed
+        patterns: list of str, optional
+            A list of regex patterns to match against the filename. If None, use the class PATTERNS
+        frequencies: dict, optional
+            A dictionary of regex patterns to match against the filename to determine the frequency
+        redaction_fill: str, optional
+            The character to replace time information with. Defaults to "X"
+
+        Returns
+        -------
+        file_id: str
+            The file id constructed by redacting time information and replacing non-python characters
+            with underscores
+        timestamp: str | None
+            A string of the redacted time information (e.g. "1990-01") if available, otherwise None
+        frequency: str | None
+            The frequency of the file if available in the filename, otherwise None
+        """
+        if patterns is None:
+            patterns = cls.PATTERNS
+
+        # Nornmally, we would try to determine frequency. In the case of the WOA
+        # data, there were no files with frequency information in the filename.
+        # See other builders if this changes & it needs adding in.
+        frequency = None
+
+        # Parse file id
+        file_id = filename
+        timestamp = None
+        for pattern in patterns:
+            match = re.match(pattern, file_id)
+            if match:
+                # FIXME switch to using named group for timestamp
+                # Loop over *the first* found group and redact
+                timestamp = match.group(1)
+                for grp in match.groups():
+                    if grp is not None:
+                        redaction = re.sub(r"\d", redaction_fill, grp)
+                        file_id = re.sub(grp, redaction, file_id, count=1)
+                break
+
+        # Remove non-python characters from file ids
+        file_id = re.sub(r"[-.]", "_", file_id)
+        file_id = re.sub(r"_+", "_", file_id).strip("_")
+
+        return file_id, timestamp, frequency
+
 
 class MopperBuilder(BaseBuilder):
     """Intake-ESM datastore builder for ACCESS-MOPPeR processed data"""
@@ -613,7 +921,7 @@ class MopperBuilder(BaseBuilder):
         self.toselect = toselect
 
     #@classmethod
-    def parser(self, fpath): 
+    def parser(self, fpath):
         if True:
             basedir = self.paths[0]
             fpattern = self.fpattern
@@ -633,10 +941,10 @@ class MopperBuilder(BaseBuilder):
             fbase = fbase.replace(basedir, "") + "/"
             dir_match = dir_re.match(fbase).groupdict()
             file_match = file_re.match(fname).groupdict()
-          
+
             exargs = {}
             exargs['date_range'] = file_match.get('date_range', '')
-            for x in toselect: 
+            for x in toselect:
                 exargs[x] = file_match.get(x, 'unknown')
                 if exargs[x] == 'unknown':
                     exargs[x] = dir_match.get(x, 'unknown')
@@ -649,7 +957,7 @@ class MopperBuilder(BaseBuilder):
         # however catalogue seems to expect a multivariable file
         # in my opinion this is limiting usefulness of catalogues for
         # the many collection that have 1 variable per file!
-        # Also file_id is required however we're not using it as this aren't multivariable 
+        # Also file_id is required however we're not using it as this aren't multivariable
         # files, so we can/should aggregate on variable not file_id
         # so I'm using variable as file_id instead.
             nc_info, exargs = self.parse_ncfile(fpath, exargs)
@@ -677,7 +985,7 @@ class MopperBuilder(BaseBuilder):
             A dataclass containing the information parsed from the file
         exargs: dict
             Stores extra arguments as frequency, date_range, variable etc, derived from fpattern
-            
+
         """
         time_format = "%Y-%m-%d, %H:%M:%S"
         # get format for dates based on dates lenght
@@ -694,7 +1002,6 @@ class MopperBuilder(BaseBuilder):
             start_date = ts.strftime(time_format)
             te = datetime.strptime(te, cmor_format)
             end_date = te.strftime(time_format)
-
         variable = exargs.pop('variable')
         with xr.open_dataset(
             fpath,
@@ -726,4 +1033,3 @@ class MopperBuilder(BaseBuilder):
         )
 
         return output_nc_info, exargs
-

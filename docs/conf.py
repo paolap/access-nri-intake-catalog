@@ -4,14 +4,16 @@
 # https://www.sphinx-doc.org/en/master/usage/configuration.html
 
 import sys
+from datetime import datetime
 
 print(sys.executable)
 
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 project = "ACCESS-NRI Intake catalog"
-copyright = "2023, ACCESS-NRI"
 author = "ACCESS-NRI"
+copyright = f"{datetime.now().year}, {author}"
+
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
@@ -26,12 +28,9 @@ extensions = [
     "sphinx.ext.autosummary",
     "autoapi.extension",
     "myst_nb",
-    "sphinx_panels",
+    "sphinx_design",
     "sphinx_copybutton",
 ]
-
-# Don't load the bootstrap 4 CSS classes relevant to panels
-panels_add_bootstrap_css = False
 
 autosummary_generate = False
 autodoc_typehints = "none"

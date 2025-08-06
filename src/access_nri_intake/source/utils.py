@@ -7,10 +7,12 @@ import warnings
 from dataclasses import asdict, dataclass, field
 from datetime import timedelta
 from pathlib import Path
-from typing import Optional, Union
 
 import cftime
+import polars as pl
 import xarray as xr
+
+FREQUENCY_STATIC = "fx"
 
 
 class EmptyFileError(Exception):
@@ -18,7 +20,7 @@ class EmptyFileError(Exception):
 
 
 @dataclass
-class _AccessNCFileInfo:
+class _NCFileInfo:
     """
     Holds information about a NetCDF file that is used to create an intake-esm
     catalog entry.
@@ -30,10 +32,10 @@ class _AccessNCFileInfo:
     more explicit tests are probably more important than the slight redundancy.
     """
 
-    filename: Union[str, Path]
+    filename: str | Path
     file_id: str
     path: str
-    filename_timestamp: Optional[str]
+    filename_timestamp: str | None
     frequency: str
     start_date: str
     end_date: str
@@ -43,11 +45,31 @@ class _AccessNCFileInfo:
     variable_cell_methods: list[str]
     variable_units: list[str]
 
-    def to_dict(self) -> dict[str, Union[str, list[str]]]:
+    def to_dict(self) -> dict[str, str | list[str]]:
         """
         Return a dictionary representation of the NcFileInfo object
         """
-        return asdict(self)
+        d = asdict(self)
+
+        d_sortable = {
+            key: val
+            for key, val in d.items()
+            if key
+            in [
+                "variable",
+                "variable_long_name",
+                "variable_standard_name",
+                "variable_cell_methods",
+                "variable_units",
+            ]
+        }
+
+        d_sorted = (pl.DataFrame(d_sortable).sort("variable")).to_dict(as_series=False)
+
+        for key, val in d_sorted.items():
+            d[key] = val
+
+        return d
 
 
 @dataclass
@@ -139,7 +161,7 @@ def _guess_start_end_dates(ts, te, frequency):
 
 def get_timeinfo(
     ds: xr.Dataset,
-    filename_frequency: Optional[str],
+    filename_frequency: str | None,
     time_dim: str,
 ) -> tuple[str, str, str]:
     """
@@ -177,7 +199,7 @@ def get_timeinfo(
     time_format = "%Y-%m-%d, %H:%M:%S"
     ts = None
     te = None
-    frequency: Union[str, tuple[Optional[int], str]] = "fx"
+    frequency: str | tuple[int | None, str] = FREQUENCY_STATIC
     has_time = time_dim in ds
 
     if has_time:
@@ -225,11 +247,11 @@ def get_timeinfo(
                 f"The frequency '{filename_frequency}' determined from filename does not "
                 f"match the frequency '{frequency}' determined from the file contents."
             )
-            if frequency == "fx":
+            if frequency == FREQUENCY_STATIC:
                 frequency = filename_frequency
             warnings.warn(f"{msg} Using '{frequency}'.")
 
-    if has_time & (frequency != "fx"):
+    if has_time & (frequency != FREQUENCY_STATIC):
         if not has_bounds:
             ts, te = _guess_start_end_dates(ts, te, frequency)
 

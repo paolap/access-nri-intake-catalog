@@ -1,5 +1,7 @@
 {% set data = load_setup_py_data(setup_file='../setup.py', from_recipe_dir=True) %}
 {% set version = data.get('version') %}
+{% set pyproj = load_file_data('../pyproject.toml', from_recipe_dir=True) %}
+{% set deps = pyproj.get('project', {}).get('dependencies',[]) %}
 
 package:
   name: access-nri-intake
@@ -18,16 +20,12 @@ requirements:
     - python
     - pip
     - versioneer
+    - setuptools >=61.0.0
   run:
-    - python >=3.9
-    - cftime
-    - ecgtools>=2023.7.13
-    - intake==0.7.0
-    - intake-dataframe-catalog>=0.2.4
-    - intake-esm>=2023.11.10
-    - jsonschema
-    - pooch
-    - xarray
+    - python >=3.10
+    {% for dep in deps %}
+    - {{ dep }}
+    {% endfor %}
 
 about:
   home: https://github.com/ACCESS-NRI/access-nri-intake-catalog

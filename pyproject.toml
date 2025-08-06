@@ -5,7 +5,7 @@ authors = [
 ]
 description = "Intake catalog managed by ACCESS-NRI and associated tools"
 readme = "README.rst"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -13,28 +13,34 @@ classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
 ]
+
 dependencies = [
     "cftime",
     "ecgtools>=2023.7.13",
-    "intake>=0.7.0",
-    "intake-dataframe-catalog>=0.2.4",
-    "intake-esm>=2023.11.10",
+    "intake>=2.0.0",
+    "intake-dataframe-catalog>=0.3.1",
+    "intake-esm>=2025.2.3",
     "jsonschema",
+    "polars>=1.24.0",
     "pooch",
     "xarray",
+    "colorama",
+    "yamanifest>=0.3.12",
+    "access-py-telemetry>=0.1.6",
 ]
 dynamic = ["version"]
 
 [project.optional-dependencies]
-test = [
-    "pytest",
-    "tox",
-] 
+test = ["pytest", "tox"]
+e2e = ["pytest", "pytest-ordering"]
 
 [project.scripts]
 catalog-build = "access_nri_intake.cli:build"
+catalog-concretize = "access_nri_intake.cli:concretize"
 metadata-validate = "access_nri_intake.cli:metadata_validate"
 metadata-template = "access_nri_intake.cli:metadata_template"
+build-esm-datastore = "access_nri_intake.cli:use_esm_datastore"
+scaffold-catalog-entry = "access_nri_intake.cli:scaffold_catalog_entry"
 
 [project.entry-points."intake.catalogs"]
 access_nri = "access_nri_intake.data:data"
