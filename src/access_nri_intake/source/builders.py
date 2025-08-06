@@ -1015,6 +1015,7 @@ class MopperBuilder(BaseBuilder):
             variable_standard_name = attrs.get('standard_name', 'unknown')
             variable_cell_methods = attrs.get('cell_methods', 'unknown')
             variable_units = attrs.get('units', 'unknown')
+            exargs['realm'] = ds.attrs.get('realm', 'unknown')
             tracking_id = ds.attrs.get('tracking_id', 'unknown')
 
         output_nc_info = _AccessNCFileInfo(
