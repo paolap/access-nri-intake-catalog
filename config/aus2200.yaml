@@ -1,0 +1,17 @@
+builder: MopperBuilder
+
+translator: DefaultTranslator
+
+sources:
+
+  - path:
+      - /g/data/bs94/AUS2200
+    metadata_yaml: /home/900/pxp900/access-nri-intake-catalog/metadata.yaml
+    ensemble: true
+# These are added attributes
+    fpattern: "{experiment}/{version}/{frequency2}/{variable}/{variable}_{model}_{experiment}_{frequency}"
+    toselect: 
+      - variable
+      - frequency
+      - version
+      - experiment

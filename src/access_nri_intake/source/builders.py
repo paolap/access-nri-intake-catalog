@@ -650,7 +650,7 @@ class AccessCm2Builder(AccessEsm15Builder):
         rf"^iceh.*\.({PATTERNS_HELPERS['ymd']}|{PATTERNS_HELPERS['ym']})$",  # ACCESS-ESM1.5/OM2/CM2 ice
         rf"^iceh.*\.({PATTERNS_HELPERS['ym']})-{PATTERNS_HELPERS['not_multi_digit']}.*",  # ACCESS-CM2 ice
         r"^.*\.p.(\d{6})_.*",  # ACCESS-CM2 atmosphere
-
+    ]
 
 class ROMSBuilder(BaseBuilder):
     """Intake-ESM datastore builder for ROMS datasets
@@ -703,37 +703,6 @@ class ROMSBuilder(BaseBuilder):
 
             ncinfo_dict["realm"] = realm
 
-            r variable = exargs.pop('variable')
-        with xr.open_dataset(
-            fpath,
-            chunks={},
-            decode_cf=False,
-            decode_times=False,
-            decode_coords=False,
-        ) as ds:
-            attrs = ds[variable].attrs
-            variable_long_name = attrs.get('long_name', 'unknown')
-            variable_standard_name = attrs.get('standard_name', 'unknown')
-            variable_cell_methods = attrs.get('cell_methods', 'unknown')
-            variable_units = attrs.get('units', 'unknown')
-            tracking_id = ds.attrs.get('tracking_id', 'unknown')
-
-        output_nc_info = _AccessNCFileInfo(
-            filename=Path(fpath).name,
-            path=fpath,
-            file_id=tracking_id,
-            filename_timestamp=date_range,
-            frequency=exargs.pop('frequency'),
-            start_date=start_date,
-            end_date=end_date,
-            variable=[variable],
-            variable_long_name=[variable_long_name],
-            variable_standard_name=[variable_standard_name],
-            variable_units=[variable_units],
-            variable_cell_methods=[variable_cell_methods],
-        )
-
-        return output_nc_info, exargseturn ncinfo_dict
         except Exception:
             return {INVALID_ASSET: file, TRACEBACK: traceback.format_exc()}
 
@@ -981,7 +950,7 @@ class MopperBuilder(BaseBuilder):
 
         Returns
         -------
-        output_nc_info: _AccessNCFileInfo
+        output_nc_info: _NCFileInfo
             A dataclass containing the information parsed from the file
         exargs: dict
             Stores extra arguments as frequency, date_range, variable etc, derived from fpattern
@@ -1002,6 +971,7 @@ class MopperBuilder(BaseBuilder):
             start_date = ts.strftime(time_format)
             te = datetime.strptime(te, cmor_format)
             end_date = te.strftime(time_format)
+
         variable = exargs.pop('variable')
         with xr.open_dataset(
             fpath,
@@ -1018,7 +988,7 @@ class MopperBuilder(BaseBuilder):
             exargs['realm'] = ds.attrs.get('realm', 'unknown')
             tracking_id = ds.attrs.get('tracking_id', 'unknown')
 
-        output_nc_info = _AccessNCFileInfo(
+        output_nc_info = _NCFileInfo(
             filename=Path(fpath).name,
             path=fpath,
             file_id=tracking_id,
